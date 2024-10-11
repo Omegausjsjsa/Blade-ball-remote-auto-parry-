@@ -33,24 +33,36 @@ local Remote = nil
 local VirtualInputManager = game:GetService("VirtualInputManager")
 
 function ResolveParryRemote()
-    for i, Items in VirtualInputManager do
+    for i, Items in pairs(VirtualInputManager:GetChildren()) do
         local RemoteEvent = Items:FindFirstChildOfClass('RemoteEvent')
         
-        if not RemoteEvent or not RemoteEvent.Name:find('\n') then
-            continue
+        if RemoteEvent and RemoteEvent.Name:find('\n') then
+            Remote = RemoteEvent
+            break
         end
-
-        Remote = RemoteEvent
     end
 end
 
 local function fireParryRemote()
     if Remote then
-        Remote:FireServer()
+        local localPlayer = players.LocalPlayer
+        local args = {
+            [1] = 0.5, -- You can adjust this value as needed
+            [2] = localPlayer.Character.HumanoidRootPart.CFrame,
+            [3] = {
+                [localPlayer.Name] = localPlayer.Character.HumanoidRootPart.Position
+            }, -- Only LocalPlayer's position
+            [4] = {
+                [1] = 773.1138916015625,
+                [2] = 166.6013946533203
+            },
+            [5] = false
+        }
+        Remote:FireServer(unpack(args))
     else
         ResolveParryRemote()
         if Remote then
-            Remote:FireServer()
+            fireParryRemote()
         end
     end
 end
@@ -129,42 +141,3 @@ Fluent:Notify({
     Content = "made with love by fet's luck.",
     Duration = 8
 })
-
-local isManualSpamActive = false
-local spamConnection
-local spamKeyPressDuration = 0.01
-
-local function manualSpam()
-    while isManualSpamActive do
-        fireParryRemote()
-        wait(spamKeyPressDuration)
-    end
-end
-
-local screenGui = Instance.new("ScreenGui")
-screenGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
-screenGui.ResetOnSpawn = false
-
-local manualSpamToggle = Instance.new("TextButton")
-manualSpamToggle.Parent = screenGui
-manualSpamToggle.Size = UDim2.new(0.15, 0, 0.1, 0)
-manualSpamToggle.Position = UDim2.new(0.05, 0, 0.05, 0)
-manualSpamToggle.Text = "Manual Spam: OFF"
-manualSpamToggle.BackgroundColor3 = Color3.fromRGB(100, 100, 255)
-manualSpamToggle.TextScaled = true
-manualSpamToggle.Draggable = true
-
-manualSpamToggle.MouseButton1Click:Connect(function()
-    isManualSpamActive = not isManualSpamActive
-    if isManualSpamActive then
-        manualSpamToggle.Text = "Manual Spam: ON"
-        manualSpamToggle.BackgroundColor3 = Color3.fromRGB(50, 255, 50)
-        spamConnection = runService.Stepped:Connect(manualSpam)
-    else
-        manualSpamToggle.Text = "Manual Spam: OFF"
-        manualSpamToggle.BackgroundColor3 = Color3.fromRGB(100, 100, 255)
-        if spamConnection then
-            spamConnection:Disconnect()
-        end
-    end
-end)
