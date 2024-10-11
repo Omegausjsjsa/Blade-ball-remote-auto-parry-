@@ -29,25 +29,30 @@ local parryCooldown = 0.3
 local lastParryTime = 0
 local speedThreshold = 120
 
+local Remote = nil
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+function ResolveParryRemote()
+    for i, Items in VirtualInputManager do
+        local RemoteEvent = Items:FindFirstChildOfClass('RemoteEvent')
+        
+        if not RemoteEvent or not RemoteEvent.Name:find('\n') then
+            continue
+        end
+
+        Remote = RemoteEvent
+    end
+end
+
 local function fireParryRemote()
-    local player = players.LocalPlayer
-    local character = player.Character or player.CharacterAdded:Wait()
-    local rootPart = character:WaitForChild("HumanoidRootPart")
-    
-    local args = {
-        [1] = 0.5,
-        [2] = rootPart.CFrame,
-        [3] = {
-            [player.Name] = rootPart.Position
-        },
-        [4] = {
-            [1] = 753.5663452148438,
-            [2] = 167.66700744628906
-        },
-        [5] = false
-    }
-    
-    game:GetService("VirtualUser"):FindFirstChild("\n\n\n\n\n\n\n\n\n"):FireServer(unpack(args))
+    if Remote then
+        Remote:FireServer()
+    else
+        ResolveParryRemote()
+        if Remote then
+            Remote:FireServer()
+        end
+    end
 end
 
 local function calculatePredictionTime(ball, player)
