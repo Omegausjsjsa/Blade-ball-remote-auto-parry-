@@ -47,7 +47,7 @@ local function fireParryRemote()
     if Remote then
         local localPlayer = players.LocalPlayer
         local args = {
-            [1] = 0.5, -- You can adjust this value as needed
+            [1] = 0.5,
             [2] = localPlayer.Character.HumanoidRootPart.CFrame,
             [3] = {
                 [localPlayer.Name] = localPlayer.Character.HumanoidRootPart.Position
