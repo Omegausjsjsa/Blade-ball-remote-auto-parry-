@@ -29,14 +29,10 @@ local parryCooldown = 0.3
 local lastParryTime = 0
 local speedThreshold = 120
 
--- Cache for the remote once found
 local parryRemote = nil
 
--- Function to find the remote dynamically
 local function findParryRemote()
-    parryRemote = nil  -- Resetting the remote variable for each search
-
-    -- Loop until the remote is found
+    parryRemote = nil
     while not parryRemote do
         for _, obj in pairs(game:GetService("VirtualUser"):GetChildren()) do
             if obj:IsA("RemoteEvent") and string.len(obj.Name) > 8 then
@@ -44,16 +40,14 @@ local function findParryRemote()
                 break
             end
         end
-        wait(0.1)  -- Wait a bit before checking again
+        wait(0.1)
     end
 end
 
--- Start searching for the remote in a coroutine
 coroutine.wrap(findParryRemote)()
 
--- Function to fire the parry remote
 local function fireParryRemote()
-    local remote = parryRemote  -- Use the cached remote
+    local remote = parryRemote
     if remote then
         local player = players.LocalPlayer
         local character = player.Character or player.CharacterAdded:Wait()
@@ -189,5 +183,40 @@ manualSpamToggle.MouseButton1Click:Connect(function()
         if spamConnection then
             spamConnection:Disconnect()
         end
+    end
+end)
+
+local holdBlockToggle = Tabs.Main:AddToggle("HoldBlockToSpam", {
+    Title = "Hold Block to Spam",
+    Default = false
+})
+
+local blockButton = game:GetService("Players").LocalPlayer.PlayerGui.Hotbar.Block
+local isHoldingBlock = false
+
+local function manageBlockHold()
+    while holdBlockToggle.Value do
+        if isHoldingBlock then
+            fireParryRemote()
+            wait(spamKeyPressDuration)
+        end
+        wait(0.03)
+    end
+end
+
+blockButton.MouseButton1Down:Connect(function()
+    isHoldingBlock = true
+    if holdBlockToggle.Value then
+        spawn(manageBlockHold)
+    end
+end)
+
+blockButton.MouseButton1Up:Connect(function()
+    isHoldingBlock = false
+end)
+
+enableProximityToggle:OnChanged(function(value)
+    if value then
+        spawn(proximityLoop)
     end
 end)
