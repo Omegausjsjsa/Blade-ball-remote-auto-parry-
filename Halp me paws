@@ -1,222 +1,365 @@
-local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
-local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
-local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
+local Client = game.Players.LocalPlayer
+local ReplicatedStorage = game.ReplicatedStorage
+local Mobs = workspace["__GAME"]["__Mobs"]
 
-local Window = Fluent:CreateWindow({
-    Title = "Etherbyte Hub",
-    SubTitle = "made by fet's luck with love",
-    TabWidth = 100,
-    Size = UDim2.fromOffset(450, 320),
-    Acrylic = true,
-    Theme = "Dark",
-    MinimizeKey = Enum.KeyCode.LeftControl
-})
+local Bridge = require(ReplicatedStorage.BridgeNet)
+local ToolNet = Bridge.CreateBridge("TOOL_EVENT")
+local AttackNet = Bridge.CreateBridge("ATTACK_EVENT")
+local RemoteNet = Bridge.CreateBridge("REMOTE_EVENT")
 
-local Tabs = {
-    Main = Window:AddTab({ Title = "Main" }),
-    Settings = Window:AddTab({ Title = "Settings" })
+local Settings = {
+    AutoPunch = false,
+    AutoAttack = false,
+    AutoDefense = false,
+    AutoChest = false,
+    AutoQuest = false,
+    SelectedEnemy = nil,
+    SelectedMode = nil,
 }
 
-local enableProximityToggle = Tabs.Main:AddToggle("EnableProximity", {
-    Title = "Enable Auto Parry",
-    Default = false
-})
-
-local players = game:GetService("Players")
-local runService = game:GetService("RunService")
-local ballFolder = workspace:WaitForChild("Balls")
-local parryCooldown = 0.3
-local lastParryTime = 0
-local speedThreshold = 120
-
-local parryRemote = nil
-
-local function findParryRemote()
-    parryRemote = nil
-    while not parryRemote do
-        for _, obj in pairs(game:GetService("VirtualUser"):GetChildren()) do
-            if obj:IsA("RemoteEvent") and string.len(obj.Name) > 8 then
-                parryRemote = obj
-                break
-            end
-        end
-        wait(0.1)
-    end
-end
-
-coroutine.wrap(findParryRemote)()
-
-local function fireParryRemote()
-    local remote = parryRemote
-    if remote then
-        local player = players.LocalPlayer
-        local character = player.Character or player.CharacterAdded:Wait()
-        local rootPart = character:WaitForChild("HumanoidRootPart")
-        
-        local args = {
-            [1] = 0.5,
-            [2] = rootPart.CFrame,
-            [3] = {
-                [player.Name] = rootPart.Position
-            },
-            [4] = {
-                [1] = 753.5663452148438,
-                [2] = 167.66700744628906
-            },
-            [5] = false
-        }
-        
-        remote:FireServer(unpack(args))
-    else
-        warn("Parry remote not found!")
-    end
-end
-
-local function calculatePredictionTime(ball, player)
-    if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-        local rootPart = player.Character.HumanoidRootPart
-        local relativePosition = ball.Position - rootPart.Position
-        local velocity = ball.Velocity + rootPart.Velocity
-        local distance = relativePosition.magnitude
-        local speed = velocity.magnitude
-        local bufferTime = 0.1
-        return math.max((distance - ball.Size.magnitude / 2) / (speed + 0.1) - bufferTime, 0), speed
-    end
-    return math.huge, 0
-end
-
-local function checkProximityToPlayer(ball, player)
-    local predictionTime, ballSpeed = calculatePredictionTime(ball, player)
-    local realBallAttribute = ball:GetAttribute("realBall")
-    local target = ball:GetAttribute("target")
-    local currentTime = tick()
-
-    if currentTime - lastParryTime < parryCooldown then return end
-
-    if ballSpeed >= speedThreshold and predictionTime <= 0.4 then
-        if realBallAttribute == true and target == player.Name then
-            fireParryRemote()
-            lastParryTime = currentTime
-        end
-    elseif predictionTime <= 0.4 then
-        if realBallAttribute == true and target == player.Name then
-            fireParryRemote()
-            lastParryTime = currentTime
-        end
-    end
-end
-
-local function checkBallsProximity()
-    local player = players.LocalPlayer
-    if player then
-        for _, ball in pairs(ballFolder:GetChildren()) do
-            if enableProximityToggle.Value then
-                checkProximityToPlayer(ball, player)
+local EnemyTable = {}
+for _, v in pairs(Mobs:GetChildren()) do
+    for _, enemy in pairs(v:GetChildren()) do
+        if enemy:FindFirstChild("NpcConfiguration") then
+            if not table.find(EnemyTable, enemy.NpcConfiguration:GetAttribute("Name")) then
+                table.insert(EnemyTable, enemy.NpcConfiguration:GetAttribute("Name"))
             end
         end
     end
 end
 
-local function proximityLoop()
-    while enableProximityToggle.Value do
-        checkBallsProximity()
-        wait(0.03)
+local function RemoveTableDupes(tab)
+    local hash = {}
+    local res = {}
+    for _, v in ipairs(tab) do
+        if not hash[v] then
+            res[#res + 1] = v
+            hash[v] = true
+        end
+    end
+    return res
+end
+
+local outputtedEnemies = RemoveTableDupes(EnemyTable)
+
+local function getClosestMob(name)
+    local closest, maxDist = nil, 9e9
+    for _, v in pairs(Mobs:GetChildren()) do
+        for _, mob in pairs(v:GetChildren()) do
+            if mob:FindFirstChild("NpcConfiguration") and mob.NpcConfiguration:GetAttribute("Health") > 0 then
+                if mob.NpcConfiguration:GetAttribute("Name") == name then
+                    local dist = (mob.PrimaryPart.Position - Client.Character.PrimaryPart.Position).magnitude
+                    if dist < maxDist then
+                        maxDist = dist
+                        closest = mob
+                    end
+                end
+            end
+        end
+    end
+    return closest
+end
+
+local function getWeapon()
+    local weapon = Client.Character:FindFirstChildOfClass("Tool")
+    if weapon and weapon:GetAttribute("Type") ~= "Defence" then
+        return weapon
     end
 end
 
-enableProximityToggle:OnChanged(function(value)
-    if value then
-        spawn(proximityLoop)
+local function getFruit()
+    local fruit = Client.Character:FindFirstChildOfClass("Tool")
+    if fruit and fruit:GetAttribute("Type") == "Fruit" then
+        return fruit
+    end
+end
+
+Mobs.ChildAdded:Connect(function(child)
+    for _, v in pairs(child:GetChildren()) do
+        if v:FindFirstChild("NpcConfiguration") then
+            if not table.find(EnemyTable, v.NpcConfiguration:GetAttribute("Name")) then
+                table.insert(EnemyTable, v.NpcConfiguration:GetAttribute("Name"))
+            end
+        end
     end
 end)
 
-SaveManager:SetLibrary(Fluent)
-InterfaceManager:SetLibrary(Fluent)
-SaveManager:IgnoreThemeSettings()
-SaveManager:SetIgnoreIndexes({})
-InterfaceManager:SetFolder("FluentScriptHub")
-SaveManager:SetFolder("FluentScriptHub/auto-parry")
+local Functions = {}
+do
+    function Functions.AutoPunch()
+        while true do
+            task.wait()
+            if Settings.AutoPunch then
+                pcall(function()
+                    local weapon = getWeapon()
+                    if weapon then
+                        ToolNet:Fire("Combat", 1, false, weapon, weapon:GetAttribute("Type"))
+                    end
+                end)
+            end
+        end
+    end
 
-InterfaceManager:BuildInterfaceSection(Tabs.Settings)
-SaveManager:BuildConfigSection(Tabs.Settings)
-SaveManager:LoadAutoloadConfig()
+    function Functions.AutoFarm()
+        while true do
+            task.wait()
+            if Settings.AutoFarm then
+                pcall(function()
+                    local weapon = getWeapon()
+                    local enemy = getClosestMob(Settings.SelectedEnemy)
+                    if weapon and enemy then
+                        Client.Character:PivotTo(enemy.PrimaryPart.CFrame * CFrame.new(0, -10, 20))
+                        AttackNet:Fire(enemy, weapon)
+                    end
+                end)
+            end
+        end
+    end
 
+    function Functions.AutoAttack()
+        while true do
+            task.wait()
+            if Settings.AutoAttack then
+                pcall(function()
+                    local weapon = getWeapon()
+                    local enemy = getClosestMob(Settings.SelectedEnemy)
+                    if weapon and enemy then
+                        AttackNet:Fire(enemy, weapon)
+                    end
+                end)
+            end
+        end
+    end
+
+    function Functions.AutoDefense()
+        while true do
+            task.wait()
+            if Settings.AutoDefense then
+                local weapon = Client.Backpack:FindFirstChild("Defence") or Client.Character:FindFirstChild("Defence")
+                if weapon then
+                    ToolNet:Fire("Defence", weapon, "Defence")
+                end
+            end
+        end
+    end
+
+    function Functions.AutoChest()
+        while true do
+            task.wait()
+            if Settings.AutoChest then
+                pcall(function()
+                    for _, v in pairs(workspace:GetChildren()) do
+                        if v:FindFirstChild("ChestInteract") then
+                            Client.Character:PivotTo(v.PrimaryPart.CFrame * CFrame.new(0, -10, 0))
+                            fireproximityprompt(v.ChestInteract)
+                        end
+                    end
+                end)
+            end
+        end
+    end
+
+    function Functions.AutoQuest()
+        while true do
+            task.wait()
+            if Settings.AutoQuest then
+                pcall(function()
+                    local container = Client.PlayerGui.Quests.CurrentQuestContainer
+                    container:GetPropertyChangedSignal("Position"):Wait()
+                    if container.Position ~= UDim2.new({ { 0.823, 0 }, { 0.362, 0 } }) then
+                        RemoteNet:Fire("GetQuest", Client.PlayerGui.Quests:GetAttribute("CurrentQuest"))
+                    end
+                end)
+            end
+        end
+    end
+
+    function Alltools()
+        while true do
+            task.wait()
+            for i,v in pairs(Client:FindFirstChildOfClass("Backpack"):GetChildren()) do
+                if v:IsA("Tool") or v:IsA("HopperBin") then
+                    v.Parent = Client.Character
+                end
+            end
+        end
+    end
+
+    -- Check if the game is loaded.
+    if not game:IsLoaded() then
+        game.Loaded:Wait()
+    end
+
+    -- Load the Fluent UI
+    local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+
+    local Window = Fluent:CreateWindow({
+        Title = "ArtanisYT | One Fruit Simulator",
+        SubTitle = "YT: Artanis made this UI!",
+        TabWidth = 100,
+        Size = UDim2.fromOffset(400, 300),
+        Theme = "Dark",
+        MinimizeKey = Enum.KeyCode.LeftControl
+    })
+
+    -- Create Main Tab
+    local MainTab = Window:AddTab({ Title = "Main", Icon = "home" })
+
+    -- Toggles for various functionality
+    MainTab:AddToggle("Auto Punch", {
+        Title = "Auto Punch",
+        Default = false,
+        Description = "Automatically punches enemies.",
+        OnChanged = function(Value)
+            Settings.AutoPunch = Value
+        end,
+    })
+
+    MainTab:AddToggle("Auto Farm", {
+        Title = "Auto Farm",
+        Default = false,
+        Description = "Automatically farms resources.",
+        OnChanged = function(Value)
+            Settings.AutoFarm = Value
+        end,
+    })
+
+    MainTab:AddToggle("Auto Attack", {
+        Title = "Auto Attack",
+        Default = false,
+        Description = "Automatically attacks enemies.",
+        OnChanged = function(Value)
+            Settings.AutoAttack = Value
+        end,
+    })
+
+    
+
+    MainTab:AddToggle("Auto Defense", {
+        Title = "Auto Defense",
+        Default = false,
+        Description = "Automatically defends.",
+        OnChanged = function(Value)
+            Settings.AutoDefense = Value
+        end,
+    })
+
+    MainTab:AddToggle("Auto Chest", {
+        Title = "Auto Chest",
+        Default = false,
+        Description = "Automatically interacts with chests.",
+        OnChanged = function(Value)
+            Settings.AutoChest = Value
+        end,
+    })
+
+    local QuestSelected;
+
+    MainTab:AddDropdown("Select Quest", {
+        Options = {"1","2","3","4","5","6","7","8"},
+        CurrentOption = "None",
+        OnChanged = function(Option)
+            QuestSelected = Option
+        end,
+    })
+
+    MainTab:AddButton({
+        Title = "Get Quest",
+        Callback = function()
+            local args = {[1] = {[1] = {[1] = "\7",[2] = "GetQuest",[3] = QuestSelected}}}
+            game:GetService("ReplicatedStorage").RemoteEvent:FireServer(unpack(args))
+        end,
+    })
+
+    MainTab:AddLabel("Get the Quest before enabling Auto Quest")
+
+    MainTab:AddToggle("Auto Quest", {
+        Title = "Auto Quest",
+        Default = false,
+        OnChanged = function(Value)
+            Settings.AutoQuest = Value
+        end,
+    })
+
+    -- Create Teleports Tab
+    local TeleportsTab = Window:AddTab({ Title = "Teleports", Icon = "map" })
+
+    TeleportsTab:AddButton({
+        Title = "Starter Island",
+        Callback = function()
+            Client.Character.HumanoidRootPart.CFrame = CFrame.new(3388.55713, 136.208038, 1728.40283)
+        end,
+    })
+
+    TeleportsTab:AddButton({
+        Title = "Jungle",
+        Callback = function()
+            Client.Character.HumanoidRootPart.CFrame = CFrame.new(1986.62134, 131.401001, 598.679565)
+        end,
+    })
+
+    TeleportsTab:AddButton({
+        Title = "Buggy",
+        Callback = function()
+            Client.Character.HumanoidRootPart.CFrame = CFrame.new(3007.479, 141.433548, -587.198181)
+        end,
+    })
+
+    TeleportsTab:AddButton({
+        Title = "Marine",
+        Callback = function()
+            Client.Character.HumanoidRootPart.CFrame = CFrame.new(4941.4248, 137.19136, 56.7856445)
+        end,
+    })
+
+    TeleportsTab:AddButton({
+        Title = "GrandCity",
+        Callback = function()
+            Client.Character.HumanoidRootPart.CFrame = CFrame.new(1038.11609, 124.763535, -1008.62189)
+        end,
+    })
+
+    TeleportsTab:AddButton({
+        Title = "Gacha",
+        Callback = function()
+            Client.Character.HumanoidRootPart.CFrame = CFrame.new(3432.12598, 140.795761, 1771.28772)
+        end,
+    })
+
+    -- Create Misc Tab
+    local MiscTab = Window:AddTab({ Title = "Misc", Icon = "settings" })
+
+    MiscTab:AddButton({
+        Title = "Equip All Tools",
+        Callback = function()
+            for _, tool in ipairs(Client.Backpack:GetChildren()) do
+                if tool:IsA("Tool") then
+                    tool.Parent = Client.Character
+                end
+            end
+        end,
+    })
+
+    MiscTab:AddInput({
+        Title = "FPS CAP",
+        PlaceholderText = "Input FPS limit",
+        RemoveTextAfterFocusLost = false,
+        Callback = function(Text)
+            setfpscap(Text)
+        end,
+    })
+
+    -- Start all functions
+    for _, v in pairs(Functions) do
+        task.spawn(v)
+    end
+
+end
+
+-- Notify the user that the script has been loaded successfully
 Fluent:Notify({
-    Title = "Etherbyte Hub",
-    Content = "made with love by fet's luck.",
-    Duration = 8
+    Title = "Script Loaded",
+    Content = "The script has been loaded with Fluent UI.",
+    Duration = 5
 })
 
-local isManualSpamActive = false
-local spamConnection
-local spamKeyPressDuration = 0.01
-
-local function manualSpam()
-    while isManualSpamActive do
-        fireParryRemote()
-        wait(spamKeyPressDuration)
-    end
-end
-
-local screenGui = Instance.new("ScreenGui")
-screenGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
-screenGui.ResetOnSpawn = false
-
-local manualSpamToggle = Instance.new("TextButton")
-manualSpamToggle.Parent = screenGui
-manualSpamToggle.Size = UDim2.new(0.15, 0, 0.1, 0)
-manualSpamToggle.Position = UDim2.new(0.05, 0, 0.05, 0)
-manualSpamToggle.Text = "Manual Spam: OFF"
-manualSpamToggle.BackgroundColor3 = Color3.fromRGB(100, 100, 255)
-manualSpamToggle.TextScaled = true
-manualSpamToggle.Draggable = true
-
-manualSpamToggle.MouseButton1Click:Connect(function()
-    isManualSpamActive = not isManualSpamActive
-    if isManualSpamActive then
-        manualSpamToggle.Text = "Manual Spam: ON"
-        manualSpamToggle.BackgroundColor3 = Color3.fromRGB(50, 255, 50)
-        spamConnection = runService.Stepped:Connect(manualSpam)
-    else
-        manualSpamToggle.Text = "Manual Spam: OFF"
-        manualSpamToggle.BackgroundColor3 = Color3.fromRGB(100, 100, 255)
-        if spamConnection then
-            spamConnection:Disconnect()
-        end
-    end
-end)
-
-local holdBlockToggle = Tabs.Main:AddToggle("HoldBlockToSpam", {
-    Title = "Hold Block to Spam",
-    Default = false
-})
-
-local blockButton = game:GetService("Players").LocalPlayer.PlayerGui.Hotbar.Block
-local isHoldingBlock = false
-
-local function manageBlockHold()
-    while holdBlockToggle.Value do
-        if isHoldingBlock then
-            fireParryRemote()
-            wait(spamKeyPressDuration)
-        end
-        wait(0.03)
-    end
-end
-
-blockButton.MouseButton1Down:Connect(function()
-    isHoldingBlock = true
-    if holdBlockToggle.Value then
-        spawn(manageBlockHold)
-    end
-end)
-
-blockButton.MouseButton1Up:Connect(function()
-    isHoldingBlock = false
-end)
-
-enableProximityToggle:OnChanged(function(value)
-    if value then
-        spawn(proximityLoop)
-    end
-end)
